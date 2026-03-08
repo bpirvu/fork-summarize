@@ -1,7 +1,6 @@
 import { isTwitterStatusUrl, isYouTubeUrl } from "@steipete/summarize-core/content/url";
 import { render as renderMarkdownAnsi } from "markdansi";
 import type { ExtractedLinkContent } from "../../../content/index.js";
-import { formatOutputLanguageForJson } from "../../../language.js";
 import { buildExtractFinishLabel, writeFinishLine } from "../../finish-line.js";
 import { writeVerbose } from "../../logging.js";
 import { prepareMarkdownForTerminal } from "../../markdown.js";
@@ -18,6 +17,7 @@ import {
   buildModelMetaFromAttempt,
   pickModelForFinishLine,
 } from "./summary-finish.js";
+import { buildUrlJsonEnv, buildUrlJsonInput } from "./summary-json.js";
 import {
   buildUrlPrompt as buildSummaryPrompt,
   shouldBypassShortContentSummary,
@@ -93,31 +93,14 @@ async function outputSummaryFromExtractedContent({
     const finishReport = flags.shouldComputeReport ? await hooks.buildReport() : null;
     const payload = {
       input: {
-        kind: "url" as const,
-        url,
-        timeoutMs: flags.timeoutMs,
-        youtube: flags.youtubeMode,
-        firecrawl: flags.firecrawlMode,
-        format: flags.format,
-        markdown: effectiveMarkdownMode,
-        timestamps: flags.transcriptTimestamps,
-        length:
-          flags.lengthArg.kind === "preset"
-            ? { kind: "preset" as const, preset: flags.lengthArg.preset }
-            : { kind: "chars" as const, maxCharacters: flags.lengthArg.maxCharacters },
-        maxOutputTokens: flags.maxOutputTokensArg,
-        model: model.requestedModelLabel,
-        language: formatOutputLanguageForJson(flags.outputLanguage),
+        ...buildUrlJsonInput({
+          flags,
+          url,
+          effectiveMarkdownMode,
+          modelLabel: model.requestedModelLabel,
+        }),
       },
-      env: {
-        hasXaiKey: Boolean(model.apiStatus.xaiApiKey),
-        hasOpenAIKey: Boolean(model.apiStatus.apiKey),
-        hasOpenRouterKey: Boolean(model.apiStatus.openrouterApiKey),
-        hasApifyToken: Boolean(model.apiStatus.apifyToken),
-        hasFirecrawlKey: model.apiStatus.firecrawlConfigured,
-        hasGoogleKey: model.apiStatus.googleConfigured,
-        hasAnthropicKey: model.apiStatus.anthropicConfigured,
-      },
+      env: buildUrlJsonEnv(model.apiStatus),
       extracted,
       slides,
       prompt,
@@ -200,31 +183,14 @@ export async function outputExtractedUrl({
     const finishReport = flags.shouldComputeReport ? await hooks.buildReport() : null;
     const payload = {
       input: {
-        kind: "url" as const,
-        url,
-        timeoutMs: flags.timeoutMs,
-        youtube: flags.youtubeMode,
-        firecrawl: flags.firecrawlMode,
-        format: flags.format,
-        markdown: effectiveMarkdownMode,
-        timestamps: flags.transcriptTimestamps,
-        length:
-          flags.lengthArg.kind === "preset"
-            ? { kind: "preset" as const, preset: flags.lengthArg.preset }
-            : { kind: "chars" as const, maxCharacters: flags.lengthArg.maxCharacters },
-        maxOutputTokens: flags.maxOutputTokensArg,
-        model: model.requestedModelLabel,
-        language: formatOutputLanguageForJson(flags.outputLanguage),
+        ...buildUrlJsonInput({
+          flags,
+          url,
+          effectiveMarkdownMode,
+          modelLabel: model.requestedModelLabel,
+        }),
       },
-      env: {
-        hasXaiKey: Boolean(model.apiStatus.xaiApiKey),
-        hasOpenAIKey: Boolean(model.apiStatus.apiKey),
-        hasOpenRouterKey: Boolean(model.apiStatus.openrouterApiKey),
-        hasApifyToken: Boolean(model.apiStatus.apifyToken),
-        hasFirecrawlKey: model.apiStatus.firecrawlConfigured,
-        hasGoogleKey: model.apiStatus.googleConfigured,
-        hasAnthropicKey: model.apiStatus.anthropicConfigured,
-      },
+      env: buildUrlJsonEnv(model.apiStatus),
       extracted,
       slides,
       prompt,
@@ -418,31 +384,14 @@ export async function summarizeExtractedUrl({
     const finishReport = flags.shouldComputeReport ? await hooks.buildReport() : null;
     const payload = {
       input: {
-        kind: "url" as const,
-        url,
-        timeoutMs: flags.timeoutMs,
-        youtube: flags.youtubeMode,
-        firecrawl: flags.firecrawlMode,
-        format: flags.format,
-        markdown: effectiveMarkdownMode,
-        timestamps: flags.transcriptTimestamps,
-        length:
-          flags.lengthArg.kind === "preset"
-            ? { kind: "preset" as const, preset: flags.lengthArg.preset }
-            : { kind: "chars" as const, maxCharacters: flags.lengthArg.maxCharacters },
-        maxOutputTokens: flags.maxOutputTokensArg,
-        model: model.requestedModelLabel,
-        language: formatOutputLanguageForJson(flags.outputLanguage),
+        ...buildUrlJsonInput({
+          flags,
+          url,
+          effectiveMarkdownMode,
+          modelLabel: model.requestedModelLabel,
+        }),
       },
-      env: {
-        hasXaiKey: Boolean(model.apiStatus.xaiApiKey),
-        hasOpenAIKey: Boolean(model.apiStatus.apiKey),
-        hasOpenRouterKey: Boolean(model.apiStatus.openrouterApiKey),
-        hasApifyToken: Boolean(model.apiStatus.apifyToken),
-        hasFirecrawlKey: model.apiStatus.firecrawlConfigured,
-        hasGoogleKey: model.apiStatus.googleConfigured,
-        hasAnthropicKey: model.apiStatus.anthropicConfigured,
-      },
+      env: buildUrlJsonEnv(model.apiStatus),
       extracted,
       slides,
       prompt,
