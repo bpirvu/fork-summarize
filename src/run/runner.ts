@@ -1,13 +1,6 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
 import { CommanderError } from "commander";
-import {
-  type CacheState,
-  clearCacheFiles,
-  DEFAULT_CACHE_MAX_MB,
-  resolveCachePath,
-} from "../cache.js";
-import { loadSummarizeConfig, mergeConfigEnv } from "../config.js";
+import { type CacheState } from "../cache.js";
 import {
   parseExtractFormat,
   parseMaxExtractCharactersArg,
@@ -22,7 +15,6 @@ import {
   resolveThemeNameFromSources,
   resolveTrueColor,
 } from "../tty/theme.js";
-import { formatVersionLine } from "../version.js";
 import { createCacheStateFromConfig } from "./cache-state.js";
 import {
   handleDaemonCliRequest,
@@ -46,6 +38,13 @@ import { resolveModelSelection } from "./run-models.js";
 import { resolveDesiredOutputTokens } from "./run-output.js";
 import { resolveCliRunSettings } from "./run-settings.js";
 import { resolveStreamSettings } from "./run-stream.js";
+import {
+  applyWidthOverride,
+  handleCacheUtilityFlags,
+  handleVersionFlag,
+  prepareRunEnvironment,
+  resolvePromptOverride,
+} from "./runner-setup.js";
 import { handleSlidesCliRequest } from "./slides-cli.js";
 import { createTempFileFromStdin } from "./stdin-temp-file.js";
 import { createSummaryEngine } from "./summary-engine.js";
@@ -67,13 +66,7 @@ export async function runCli(
 ): Promise<void> {
   (globalThis as unknown as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
 
-  const normalizedArgv = argv.filter((arg) => arg !== "--");
-  const noColorFlag = normalizedArgv.includes("--no-color");
-  let envForRun: Record<string, string | undefined> = noColorFlag
-    ? { ...inputEnv, NO_COLOR: "1", FORCE_COLOR: "0" }
-    : { ...inputEnv };
-  const { config: bootstrapConfig } = loadSummarizeConfig({ env: envForRun });
-  envForRun = mergeConfigEnv({ env: envForRun, config: bootstrapConfig });
+  const { normalizedArgv, envForRun } = prepareRunEnvironment(argv, inputEnv);
   const env = envForRun;
 
   if (handleHelpRequest({ normalizedArgv, envForRun, stdout, stderr })) {
@@ -144,99 +137,24 @@ export async function runCli(
     throw error;
   }
 
-  if (program.opts().version) {
-    stdout.write(`${formatVersionLine()}\n`);
+  if (handleVersionFlag({ versionRequested: Boolean(program.opts().version), stdout })) {
     return;
   }
 
-  // --width: override terminal width for markdown rendering (injected via COLUMNS env).
-  const widthArg =
-    typeof program.opts().width === "string" ? Number(program.opts().width) : undefined;
-  if (widthArg !== undefined) {
-    if (!Number.isFinite(widthArg) || widthArg < 20) {
-      throw new Error("--width must be a number >= 20.");
-    }
-    env.COLUMNS = String(Math.floor(widthArg));
-  }
+  applyWidthOverride({ width: program.opts().width, env });
 
-  const promptArg = typeof program.opts().prompt === "string" ? program.opts().prompt : null;
-  const promptFileArg =
-    typeof program.opts().promptFile === "string" ? program.opts().promptFile : null;
-  if (promptArg && promptFileArg) {
-    throw new Error("Use either --prompt or --prompt-file (not both).");
-  }
-  let promptOverride: string | null = null;
-  if (promptFileArg) {
-    let text: string;
-    try {
-      text = await fs.readFile(promptFileArg, "utf8");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to read --prompt-file ${promptFileArg}: ${message}`);
-    }
-    const trimmed = text.trim();
-    if (!trimmed) {
-      throw new Error(`Prompt file ${promptFileArg} is empty.`);
-    }
-    promptOverride = trimmed;
-  } else if (promptArg) {
-    const trimmed = promptArg.trim();
-    if (!trimmed) {
-      throw new Error("Prompt must not be empty.");
-    }
-    promptOverride = trimmed;
-  }
+  let promptOverride = await resolvePromptOverride({
+    prompt: program.opts().prompt,
+    promptFile: program.opts().promptFile,
+  });
 
-  const clearCacheFlag = normalizedArgv.includes("--clear-cache");
-  if (clearCacheFlag) {
-    const extraArgs = normalizedArgv.filter((arg) => arg !== "--clear-cache");
-    if (extraArgs.length > 0) {
-      throw new Error("--clear-cache must be used alone.");
-    }
-    const { config } = loadSummarizeConfig({ env: envForRun });
-    const cachePath = resolveCachePath({
-      env: envForRun,
-      cachePath: config?.cache?.path ?? null,
-    });
-    if (!cachePath) {
-      throw new Error("Unable to resolve cache path (missing HOME).");
-    }
-    clearCacheFiles(cachePath);
-    stdout.write("Cache cleared.\n");
-    return;
-  }
-
-  const cacheStatsFlag = normalizedArgv.includes("--cache-stats");
-  if (cacheStatsFlag) {
-    const extraArgs = normalizedArgv.filter((arg) => arg !== "--cache-stats");
-    if (extraArgs.length > 0) {
-      throw new Error("--cache-stats must be used alone.");
-    }
-    const { config } = loadSummarizeConfig({ env: envForRun });
-    const cachePath = resolveCachePath({
-      env: envForRun,
-      cachePath: config?.cache?.path ?? null,
-    });
-    if (!cachePath) {
-      throw new Error("Unable to resolve cache path (missing HOME).");
-    }
-    const cacheMaxMb =
-      typeof config?.cache?.maxMb === "number" ? config.cache.maxMb : DEFAULT_CACHE_MAX_MB;
-    const cacheMaxBytes = Math.max(0, cacheMaxMb) * 1024 * 1024;
-    const { readCacheStats } = await import("../cache.js");
-    const { formatBytes } = await import("../tty/format.js");
-    const stats = await readCacheStats(cachePath);
-    stdout.write(`Cache path: ${cachePath}\n`);
-    if (!stats) {
-      stdout.write("Cache is empty.\n");
-      return;
-    }
-    const sizeLabel = formatBytes(stats.sizeBytes);
-    const maxLabel = cacheMaxBytes > 0 ? formatBytes(cacheMaxBytes) : "disabled";
-    stdout.write(`Size: ${sizeLabel} (max ${maxLabel})\n`);
-    stdout.write(
-      `Entries: total=${stats.totalEntries} extract=${stats.counts.extract} summary=${stats.counts.summary} transcript=${stats.counts.transcript}\n`,
-    );
+  if (
+    await handleCacheUtilityFlags({
+      normalizedArgv,
+      envForRun,
+      stdout,
+    })
+  ) {
     return;
   }
 
