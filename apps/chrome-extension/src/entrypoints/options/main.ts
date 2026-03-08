@@ -1,10 +1,3 @@
-import {
-  deleteSkill,
-  getSkill,
-  listSkills,
-  type Skill,
-  saveSkill,
-} from "../../automation/skills-store";
 import { buildUserScriptsGuidance, getUserScriptsStatus } from "../../automation/userscripts";
 import { readPresetOrCustomValue, resolvePresetOrCustom } from "../../lib/combo";
 import { defaultSettings, loadSettings, saveSettings } from "../../lib/settings";
@@ -15,6 +8,7 @@ import { createLogsViewer } from "./logs-viewer";
 import { createModelPresetsController } from "./model-presets";
 import { mountOptionsPickers } from "./pickers";
 import { createProcessesViewer } from "./processes-viewer";
+import { createSkillsController } from "./skills-controller";
 import { createOptionsTabs } from "./tab-controller";
 
 declare const __SUMMARIZE_GIT_HASH__: string;
@@ -107,13 +101,6 @@ let slidesOcrEnabledValue = defaultSettings.slidesOcrEnabled;
 let extendedLoggingValue = defaultSettings.extendedLogging;
 let autoCliFallbackValue = defaultSettings.autoCliFallback;
 
-let skillsCache: Skill[] = [];
-let skillsFiltered: Skill[] = [];
-let skillsSearchQuery = "";
-let editingSkill: Skill | null = null;
-let importConflicts: Array<{ skill: Skill; selected: boolean }> = [];
-let importedSkills: Skill[] = [];
-
 let isInitializing = true;
 let saveTimer = 0;
 let saveInFlight = false;
@@ -190,6 +177,19 @@ const flashStatus = (text: string, duration = 900) => {
   setStatus(text);
   statusTimer = window.setTimeout(() => setStatus(""), duration);
 };
+
+const skillsController = createSkillsController({
+  elements: {
+    searchEl: skillsSearchEl,
+    listEl: skillsListEl,
+    emptyEl: skillsEmptyEl,
+    conflictsEl: skillsConflictsEl,
+    exportBtn: skillsExportBtn,
+    importBtn: skillsImportBtn,
+  },
+  setStatus,
+  flashStatus,
+});
 
 const scheduleAutoSave = (delay = 500) => {
   if (isInitializing) return;
@@ -449,385 +449,7 @@ async function requestAutomationPermissions() {
 automationPermissionsBtn.addEventListener("click", () => {
   void requestAutomationPermissions();
 });
-
-const updateSkillsEmptyState = () => {
-  skillsEmptyEl.textContent = skillsSearchQuery
-    ? "No skills match your search."
-    : "No skills created yet.";
-  skillsEmptyEl.hidden = skillsFiltered.length > 0 || importConflicts.length > 0;
-};
-
-const updateSkillDraft = (patch: Partial<Skill>) => {
-  if (!editingSkill) return;
-  editingSkill = { ...editingSkill, ...patch };
-};
-
-const renderSkills = () => {
-  skillsListEl.replaceChildren();
-  skillsConflictsEl.replaceChildren();
-
-  if (importConflicts.length > 0) {
-    skillsConflictsEl.hidden = false;
-    const title = document.createElement("div");
-    title.className = "skillName";
-    title.textContent = "Import conflicts";
-    const hint = document.createElement("div");
-    hint.className = "hint";
-    hint.textContent = "Select which skills should overwrite existing entries.";
-    const list = document.createElement("div");
-    list.className = "skillsConflictsList";
-
-    importConflicts.forEach((conflict, index) => {
-      const row = document.createElement("label");
-      row.className = "skillsConflictItem";
-
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = conflict.selected;
-      checkbox.addEventListener("change", () => {
-        importConflicts[index] = { ...conflict, selected: checkbox.checked };
-      });
-
-      const content = document.createElement("div");
-      content.style.display = "grid";
-      content.style.gap = "2px";
-
-      const name = document.createElement("div");
-      name.className = "skillName";
-      name.textContent = conflict.skill.name;
-
-      const domains = document.createElement("div");
-      domains.className = "skillDomains";
-      domains.textContent = conflict.skill.domainPatterns.join(", ");
-
-      const desc = document.createElement("div");
-      desc.className = "skillDescription";
-      desc.textContent = conflict.skill.shortDescription;
-
-      content.append(name, domains, desc);
-      row.append(checkbox, content);
-      list.append(row);
-    });
-
-    const actions = document.createElement("div");
-    actions.className = "skillsConflictActions";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "miniButton";
-    cancelBtn.textContent = "Cancel";
-    cancelBtn.addEventListener("click", () => {
-      importConflicts = [];
-      importedSkills = [];
-      renderSkills();
-    });
-    const importBtn = document.createElement("button");
-    importBtn.type = "button";
-    importBtn.className = "miniButton";
-    importBtn.textContent = "Import selected";
-    importBtn.addEventListener("click", () => {
-      void performImport(importedSkills);
-    });
-    actions.append(cancelBtn, importBtn);
-
-    skillsConflictsEl.append(title, hint, list, actions);
-    updateSkillsEmptyState();
-    return;
-  }
-
-  skillsConflictsEl.hidden = true;
-
-  for (const skill of skillsFiltered) {
-    if (editingSkill && editingSkill.name === skill.name) {
-      const editor = document.createElement("div");
-      editor.className = "skillEditor";
-
-      const heading = document.createElement("div");
-      heading.className = "skillName";
-      heading.textContent = `Edit skill: ${editingSkill.name}`;
-
-      const nameLabel = document.createElement("label");
-      const nameLabelText = document.createElement("span");
-      nameLabelText.textContent = "Name";
-      const nameInput = document.createElement("input");
-      nameInput.type = "text";
-      nameInput.value = editingSkill.name;
-      nameInput.disabled = true;
-      nameLabel.append(nameLabelText, nameInput);
-
-      const domainLabel = document.createElement("label");
-      const domainLabelText = document.createElement("span");
-      domainLabelText.textContent = "Domain patterns (comma-separated)";
-      const domainInput = document.createElement("input");
-      domainInput.type = "text";
-      domainInput.value = editingSkill.domainPatterns.join(", ");
-      domainInput.addEventListener("input", () => {
-        const patterns = domainInput.value
-          .split(",")
-          .map((value) => value.trim())
-          .filter(Boolean);
-        updateSkillDraft({ domainPatterns: patterns });
-      });
-      domainLabel.append(domainLabelText, domainInput);
-
-      const shortLabel = document.createElement("label");
-      const shortText = document.createElement("span");
-      shortText.textContent = "Short description";
-      const shortInput = document.createElement("input");
-      shortInput.type = "text";
-      shortInput.value = editingSkill.shortDescription;
-      shortInput.addEventListener("input", () =>
-        updateSkillDraft({ shortDescription: shortInput.value }),
-      );
-      shortLabel.append(shortText, shortInput);
-
-      const descriptionLabel = document.createElement("label");
-      const descriptionText = document.createElement("span");
-      descriptionText.textContent = "Description (Markdown)";
-      const descriptionInput = document.createElement("textarea");
-      descriptionInput.rows = 4;
-      descriptionInput.value = editingSkill.description;
-      descriptionInput.addEventListener("input", () =>
-        updateSkillDraft({ description: descriptionInput.value }),
-      );
-      descriptionLabel.append(descriptionText, descriptionInput);
-
-      const examplesLabel = document.createElement("label");
-      const examplesText = document.createElement("span");
-      examplesText.textContent = "Examples (JavaScript)";
-      const examplesInput = document.createElement("textarea");
-      examplesInput.rows = 4;
-      examplesInput.value = editingSkill.examples;
-      examplesInput.addEventListener("input", () =>
-        updateSkillDraft({ examples: examplesInput.value }),
-      );
-      examplesLabel.append(examplesText, examplesInput);
-
-      const libraryLabel = document.createElement("label");
-      const libraryText = document.createElement("span");
-      libraryText.textContent = "Library code";
-      const libraryInput = document.createElement("textarea");
-      libraryInput.rows = 8;
-      libraryInput.value = editingSkill.library;
-      libraryInput.addEventListener("input", () =>
-        updateSkillDraft({ library: libraryInput.value }),
-      );
-      libraryLabel.append(libraryText, libraryInput);
-
-      const actionRow = document.createElement("div");
-      actionRow.className = "skillActions";
-      const cancelBtn = document.createElement("button");
-      cancelBtn.type = "button";
-      cancelBtn.className = "miniButton";
-      cancelBtn.textContent = "Cancel";
-      cancelBtn.addEventListener("click", () => {
-        editingSkill = null;
-        renderSkills();
-      });
-      const saveBtn = document.createElement("button");
-      saveBtn.type = "button";
-      saveBtn.className = "miniButton";
-      saveBtn.textContent = "Save";
-      saveBtn.addEventListener("click", () => {
-        void saveEditingSkill();
-      });
-      actionRow.append(cancelBtn, saveBtn);
-
-      editor.append(
-        heading,
-        nameLabel,
-        domainLabel,
-        shortLabel,
-        descriptionLabel,
-        examplesLabel,
-        libraryLabel,
-        actionRow,
-      );
-      skillsListEl.append(editor);
-      continue;
-    }
-
-    const card = document.createElement("div");
-    card.className = "skillCard";
-
-    const header = document.createElement("div");
-    header.className = "skillHeader";
-
-    const name = document.createElement("div");
-    name.className = "skillName";
-    name.textContent = skill.name;
-
-    const domains = document.createElement("div");
-    domains.className = "skillDomains";
-    domains.textContent = skill.domainPatterns.join(", ");
-
-    header.append(name, domains);
-
-    const desc = document.createElement("div");
-    desc.className = "skillDescription";
-    desc.textContent = skill.shortDescription;
-
-    const actions = document.createElement("div");
-    actions.className = "skillActions";
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "miniButton";
-    editBtn.textContent = "Edit";
-    editBtn.addEventListener("click", () => {
-      editingSkill = { ...skill };
-      renderSkills();
-    });
-    const deleteBtn = document.createElement("button");
-    deleteBtn.type = "button";
-    deleteBtn.className = "miniButton";
-    deleteBtn.textContent = "Delete";
-    deleteBtn.addEventListener("click", () => {
-      void deleteSkillWithPrompt(skill);
-    });
-    actions.append(editBtn, deleteBtn);
-
-    card.append(header, desc, actions);
-    skillsListEl.append(card);
-  }
-
-  updateSkillsEmptyState();
-};
-
-const filterSkills = () => {
-  const query = skillsSearchQuery.toLowerCase();
-  skillsFiltered = skillsCache.filter(
-    (skill) =>
-      skill.name.toLowerCase().includes(query) ||
-      skill.shortDescription.toLowerCase().includes(query) ||
-      skill.domainPatterns.some((pattern) => pattern.toLowerCase().includes(query)),
-  );
-  renderSkills();
-};
-
-const loadSkills = async () => {
-  skillsCache = (await listSkills()).sort((a, b) => a.name.localeCompare(b.name));
-  filterSkills();
-};
-
-const deleteSkillWithPrompt = async (skill: Skill) => {
-  if (!confirm(`Delete skill "${skill.name}"?`)) return;
-  await deleteSkill(skill.name);
-  editingSkill = null;
-  await loadSkills();
-};
-
-const saveEditingSkill = async () => {
-  if (!editingSkill) return;
-  const now = new Date().toISOString();
-  const toSave: Skill = {
-    ...editingSkill,
-    createdAt: editingSkill.createdAt || now,
-    lastUpdated: now,
-  };
-  await saveSkill(toSave);
-  editingSkill = null;
-  await loadSkills();
-};
-
-const coerceSkill = (raw: unknown): Skill | null => {
-  if (!raw || typeof raw !== "object") return null;
-  const obj = raw as Record<string, unknown>;
-  const name = typeof obj.name === "string" ? obj.name.trim() : "";
-  if (!name) return null;
-  const domainPatterns = Array.isArray(obj.domainPatterns)
-    ? obj.domainPatterns.map((pattern) => String(pattern).trim()).filter(Boolean)
-    : [];
-  const createdAt = typeof obj.createdAt === "string" ? obj.createdAt : new Date().toISOString();
-  const lastUpdated = typeof obj.lastUpdated === "string" ? obj.lastUpdated : createdAt;
-  return {
-    name,
-    domainPatterns,
-    shortDescription: typeof obj.shortDescription === "string" ? obj.shortDescription : "",
-    description: typeof obj.description === "string" ? obj.description : "",
-    examples: typeof obj.examples === "string" ? obj.examples : "",
-    library: typeof obj.library === "string" ? obj.library : "",
-    createdAt,
-    lastUpdated,
-  };
-};
-
-const exportSkills = async () => {
-  const all = await listSkills();
-  const json = JSON.stringify(all, null, 2);
-  const blob = new Blob([json], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `summarize-skills-${new Date().toISOString().split("T")[0]}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-};
-
-const importSkills = async () => {
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = "application/json,.json";
-  input.addEventListener("change", () => {
-    void (async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const text = await file.text();
-        const parsed = JSON.parse(text);
-        if (!Array.isArray(parsed)) {
-          setStatus("Invalid skills file: expected an array.");
-          return;
-        }
-        const incoming = parsed.map(coerceSkill).filter((skill): skill is Skill => Boolean(skill));
-        importedSkills = incoming;
-
-        const conflicts: Array<{ skill: Skill; selected: boolean }> = [];
-        for (const skill of incoming) {
-          const existing = await getSkill(skill.name);
-          if (existing) conflicts.push({ skill, selected: true });
-        }
-
-        if (conflicts.length > 0) {
-          importConflicts = conflicts;
-          renderSkills();
-          return;
-        }
-
-        await performImport(incoming);
-      } catch (error) {
-        setStatus(
-          `Failed to import skills: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    })();
-  });
-  input.click();
-};
-
-const performImport = async (skills: Skill[]) => {
-  const skip = new Set(importConflicts.filter((c) => !c.selected).map((c) => c.skill.name));
-  const toImport = skills.filter((skill) => !skip.has(skill.name));
-  for (const skill of toImport) {
-    await saveSkill(skill);
-  }
-  importConflicts = [];
-  importedSkills = [];
-  await loadSkills();
-  setStatus(`Imported ${toImport.length} skill(s).`);
-  setTimeout(() => setStatus(""), 900);
-};
-
-skillsSearchEl.addEventListener("input", () => {
-  skillsSearchQuery = skillsSearchEl.value.trim();
-  filterSkills();
-});
-
-skillsExportBtn.addEventListener("click", () => {
-  void exportSkills();
-});
-
-skillsImportBtn.addEventListener("click", () => {
-  void importSkills();
-});
+skillsController.bind();
 
 const updateHoverSummariesToggle = () => {
   hoverSummariesToggle.update({
@@ -998,7 +620,7 @@ async function load() {
   currentMode = s.colorMode;
   pickers.update({ scheme: currentScheme, mode: currentMode, ...pickerHandlers });
   applyTheme({ scheme: s.colorScheme, mode: s.colorMode });
-  await loadSkills();
+  await skillsController.load();
   await updateAutomationPermissionsUi();
   if (resolveActiveTab() === "logs") {
     logsViewer.handleTokenChanged();
